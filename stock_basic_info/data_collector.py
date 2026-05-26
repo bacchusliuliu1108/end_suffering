@@ -320,7 +320,7 @@ class StockDataCollector:
                 # ====================================================
                 # 👉 【已修改】首次拉取或全新同步时，严格限制从 20260526 开始
                 # ====================================================
-                start_date = '20260526'
+                start_date = '20260525'
 
             end_date = datetime.now().strftime('%Y%m%d')
             self.logger.info(f"更新 {ts_code}: {start_date} 到 {end_date}")
