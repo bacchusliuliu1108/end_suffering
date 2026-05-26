@@ -1,0 +1,30 @@
+name: 每日17点云端爬虫
+
+on:
+  schedule:
+    # 国际标准时间 (UTC) 09:00 = 北京时间 17:00
+    - cron: '0 9 * * *'
+  workflow_dispatch: # 开启这个，允许你在 GitHub 网页上手动点击按钮测试运行
+
+jobs:
+  run-crawler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 拉取你上传的所有代码
+        uses: actions/checkout@v3
+
+      - name: 2. 在云端配置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 3. 自动安装你在 requirements.txt 里写的依赖包
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: 4. 真正开始运行你的云端主任务
+        env:
+          # 让云端机器人去读取 GitHub 密码本里的 Supabase 连接串
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        # 因为你的脚本在 cronjob 文件夹下，所以路径这样写
+        run: python cronjob/cloud_task.py

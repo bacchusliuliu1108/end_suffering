@@ -1,0 +1,31 @@
+# ====================================================
+# 👉 针对轻量化中转项目的绝对防御规则
+# ====================================================
+
+# 1. 拦截可能创建的本地 Python 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+
+# 2. 拦截 Python 运行产生的代码缓存（这个极容易污染仓库）
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 3. 拦截 Mac 系统自动生成的隐藏垃圾文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 4. 拦截本地编辑器（如 VS Code 或 PyCharm）的配置文件夹
+.vscode/
+.idea/
+
+# 5. 安全防御：万一以后误在这里生成了数据文件，直接拦截
+stock_basic_info/stock_data/
+*.csv
+*.xlsx
+*.parquet
+*.pkl
