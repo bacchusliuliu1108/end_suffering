@@ -2,29 +2,32 @@ name: 每日17点云端爬虫
 
 on:
   schedule:
-    # 国际标准时间 (UTC) 09:00 = 北京时间 17:00
-    - cron: '0 9 * * *'
-  workflow_dispatch: # 开启这个，允许你在 GitHub 网页上手动点击按钮测试运行
+    - cron: '0 9 * * *' # UTC 9:00 = 北京时间 17:00
+  workflow_dispatch: # 允许手动点击 Run workflow 运行
 
 jobs:
-  run-crawler:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 1. 拉取你上传的所有代码
-        uses: actions/checkout@v3
+    - name: 拉取代码
+      uses: actions/checkout@v3
 
-      - name: 2. 在云端配置 Python 环境
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: 配置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: 3. 自动安装你在 requirements.txt 里写的依赖包
-        run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    - name: 安装依赖包
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-      - name: 4. 真正开始运行你的云端主任务
-        env:
-          # 让云端机器人去读取 GitHub 密码本里的 Supabase 连接串
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        # 因为你的脚本在 cronjob 文件夹下，所以路径这样写
-        run: python cronjob/cloud_task.py
+    - name: 🚀 运行云端主任务 (带环境变量桥接)
+      env:
+        # 这一段就是把 GitHub 的密码桥接给 Python 脚本的关键！
+        SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        WXPUSHER_TOKEN: ${{ secrets.WXPUSHER_TOKEN }}
+        WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+      run: python cronjob/cloud_task.py
