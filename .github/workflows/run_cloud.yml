@@ -28,6 +28,5 @@ jobs:
         # 这一段就是把 GitHub 的密码桥接给 Python 脚本的关键！
         SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        WXPUSHER_TOKEN: ${{ secrets.WXPUSHER_TOKEN }}
-        WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+        PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       run: python cronjob/cloud_task.py

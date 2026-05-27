@@ -1,90 +1,175 @@
 import os
-import psycopg2
-import datetime
-import subprocess
+import sys
+from datetime import datetime, timedelta
 import requests
+import psycopg2
 
-# ================= 1. 获取系统环境变量 =================
-DB_URL = os.getenv("SUPABASE_DB_URL")
-WXPUSHER_TOKEN = os.getenv("WXPUSHER_TOKEN")
-WXPUSHER_UID = os.getenv("WXPUSHER_UID")
+# ================= 1. 配置区 =================
+PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_DB_URL")
 
 
-# ================= 2. 微信推送通知函数 =================
-def send_wechat_msg(title, content):
-    """用于发送运行结果到微信"""
-    if not WXPUSHER_TOKEN or not WXPUSHER_UID:
-        print("未配置微信 Token 或 UID，跳过推送。")
+# =============================================
+
+def send_pushplus_msg(title, content):
+    """发送 PushPlus 通知"""
+    if not PUSHPLUS_TOKEN:
+        print("⚠️ 未配置 PUSHPLUS_TOKEN，跳过推送。")
         return
-    url = "https://wxpusher.zjiecode.com/api/send/message"
+    url = "http://www.pushplus.plus/send"
     data = {
-        "appToken": WXPUSHER_TOKEN,
+        "token": PUSHPLUS_TOKEN,
+        "title": title,
         "content": content,
-        "summary": title,
-        "contentType": 1,
-        "uids": [WXPUSHER_UID]
+        "template": "txt"
     }
     try:
         requests.post(url, json=data)
+        print("✅ 微信推送成功！")
     except Exception as e:
-        print(f"微信推送失败: {e}")
+        print(f"❌ 微信推送失败: {e}")
 
 
-# ================= 3. 主程序逻辑 =================
+def get_target_trade_date(now):
+    """根据17点分水岭及周末剔除，计算当前理论上应该抓取哪天的数据"""
+    # 1. 17点前算前一天，17点后算当天
+    if now.hour < 17:
+        target = now - timedelta(days=1)
+    else:
+        target = now
+
+    # 2. 如果目标日期是周末，自动回退到周五
+    # weekday(): 0是周一, 5是周六, 6是周日
+    if target.weekday() == 5:  # 周六 -> 退回周五
+        target = target - timedelta(days=1)
+    elif target.weekday() == 6:  # 周日 -> 退回周五
+        target = target - timedelta(days=2)
+
+    return target.strftime("%Y%m%d")
+
+
+def check_if_data_exists(target_date):
+    """检查目标日期的数据在数据库中是否已经基本完整"""
+    try:
+        conn = psycopg2.connect(SUPABASE_URL)
+        cursor = conn.cursor()
+
+        # 1. 获取 stock_basic 中最新的活跃股票总数
+        cursor.execute("SELECT count(*) FROM stock_basic;")
+        total_stocks = cursor.fetchone()[0]
+
+        # 2. 获取 daily_data 中该目标日期的已存条数
+        cursor.execute("SELECT count(*) FROM daily_data WHERE trade_date = %s;", (target_date,))
+        existing_count = cursor.fetchone()[0]
+
+        cursor.close()
+        conn.close()
+
+        print(f"📊 基础大名单总数: {total_stocks} 只")
+        print(f"📊 {target_date} 当日已存条数: {existing_count} 条")
+
+        if total_stocks == 0:
+            return False, 0, 0
+
+        # 3. 如果已有条数超过大名单的 95%，认定为已经成功跑过
+        is_complete = (existing_count >= total_stocks * 0.95)
+        return is_complete, existing_count, total_stocks
+
+    except Exception as e:
+        print(f"🔍 检查数据完整性失败: {e}")
+        return False, 0, 0
+
+
+def get_db_max_date():
+    """获取当前数据库中最新的交易日期"""
+    try:
+        conn = psycopg2.connect(SUPABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(trade_date) FROM daily_data;")
+        res = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        return res
+    except Exception as e:
+        return None
+
+
 def main():
-    start_time = datetime.datetime.now()
-    print(f"[{start_time}] 开始执行云端主任务...")
+    start_time = datetime.now()
+    start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{start_str}] 🚀 开始执行云端主任务...")
 
-    # ---------------- 步骤 A: 运行你的爬虫脚本 ----------------
-    print("正在调用爬虫脚本 data_collector.py ...")
+    # --- 1. 计算目标日期 ---
+    target_date = get_target_trade_date(start_time)
+    print(f"🎯 根据分水岭算法，当前目标交易日应为: {target_date}")
 
-    # 注意：这里的路径是以项目最外层为起点的相对路径
-    result = subprocess.run(
-        ["python", "stock_basic_info/data_collector.py"],
-        capture_output=True,
-        text=True
+    # --- 2. 预先更新一遍 stock_basic (确保名单最新) ---
+    print("⏳ 正在自动更新云端 stock_basic 名单...")
+    # 这里直接复用了你的 data_collector.py 里面的名单拉取逻辑，或者直接运行它
+    # 如果你的爬虫脚本运行就会自动更新 basic，我们可以通过判断来决定要不要跑全量 daily
+
+    # --- 3. 智能判定是否需要拦截 ---
+    is_complete, existing_count, total_stocks = check_if_data_exists(target_date)
+
+    if is_complete:
+        # 🟩 【触发拦截拦截】数据已存在，直接下班！
+        end_time = datetime.now()
+        end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        title = "今日量化数据无须重复同步"
+        content = (
+            f"⏱️ 检查时间: {end_str}\n"
+            f"📅 目标交易日: {target_date}\n"
+            f"📊 数据库状态: 已有 {existing_count} 条 / 股票总数 {total_stocks} 只\n"
+            f"💡 结论: 该日数据已基本完整，系统自动拦截，未消耗 Tushare 额度。\n\n"
+            f"✅ 云端状态安全，Mac 无须拉取新数据。"
+        )
+        print("\n" + content)
+        send_pushplus_msg(title, content)
+        sys.exit(0)  # 优雅退出
+
+    # 🟨 【未通过拦截】说明需要干活
+    old_max_date = get_db_max_date()
+    print(f"🚀 数据未就绪，启动核心爬虫脚本 data_collector.py ...")
+
+    exit_code = os.system("python cronjob/data_collector.py")
+
+    if exit_code != 0:
+        send_pushplus_msg("告警：云端爬虫运行崩溃",
+                          f"任务开始时间: {start_str}\n爬虫脚本执行失败，请前往 GitHub 检查日志！")
+        sys.exit(1)
+
+    # --- 4. 统计战果并整装发射 ---
+    end_time = datetime.now()
+    end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+    duration_minutes = round((end_time - start_time).total_seconds() / 60, 2)
+
+    # 重新连接数据库看一眼最终增加了多少
+    try:
+        conn = psycopg2.connect(SUPABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT count(*) FROM daily_data WHERE trade_date = %s;", (target_date,))
+        final_count = cursor.fetchone()[0]
+        new_inserted = final_count - existing_count
+        new_max_date = get_db_max_date()
+        cursor.close()
+        conn.close()
+    except:
+        new_inserted = "未知"
+        new_max_date = target_date
+
+    title = "今日量化数据同步完毕"
+    content = (
+        f"⏱️ 开始时间: {start_str}\n"
+        f"🏁 结束时间: {end_str}\n"
+        f"⏳ 任务耗时: {duration_minutes} 分钟\n"
+        f"📈 本次新增: {new_inserted} 条\n"
+        f"📅 最新交易日: {new_max_date if new_max_date else '暂无数据'}\n\n"
+        f"✅ 进货成功！Mac 可随时执行拉取。"
     )
 
-    # 检查爬虫是否报错退出
-    if result.returncode != 0:
-        error_msg = f"❌ 爬虫脚本执行崩溃！\n报错日志:\n{result.stderr}"
-        print(error_msg)
-        send_wechat_msg("告警：云端爬虫失败", error_msg)
-        raise Exception("爬虫脚本异常退出")
-    else:
-        print(f"✅ 爬虫执行成功！部分输出日志:\n{result.stdout[:500]}...")  # 只打印前500字防止日志太长
-
-    # ---------------- 步骤 B: 瘦身清理云端旧数据 ----------------
-    print("正在连接云数据库进行过期缓存清理...")
-    conn = psycopg2.connect(DB_URL)
-    try:
-        with conn.cursor() as cursor:
-            # 👇👇👇👇👇 【你唯一需要修改的地方】 👇👇👇👇👇
-            # 请把 【你的表名】 换成真实的表，把 【你的时间字段】 换成真实的时间列（比如 created_at 或 trade_date）
-            clean_sql = """
-                            DELETE FROM daily_data 
-                            WHERE created_at < CURRENT_DATE - INTERVAL '3 days';
-                        """
-            # 👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆
-
-            cursor.execute(clean_sql)
-            deleted_rows = cursor.rowcount
-            print(f"清理完成，共删除了 {deleted_rows} 条 3 天前的过期数据。")
-
-        conn.commit()
-
-        # ---------------- 步骤 C: 全链路成功，发送微信捷报 ----------------
-        success_msg = f"✅ 今日云端任务全部完成！\n1. 爬虫脚本已成功拉取新数据。\n2. 云端数据库已自动清理 {deleted_rows} 条过期缓存。\n\n目前云端缓冲池状态健康，等待本地同步拉取。"
-        send_wechat_msg("✅ 云端爬虫运行成功", success_msg)
-
-    except Exception as e:
-        conn.rollback()
-        error_msg = f"清理旧数据时连接数据库失败:\n{str(e)}"
-        print(error_msg)
-        send_wechat_msg("告警：云端数据库操作失败", error_msg)
-        raise e
-    finally:
-        conn.close()
+    print("\n" + content)
+    send_pushplus_msg(title, content)
 
 
 if __name__ == "__main__":
