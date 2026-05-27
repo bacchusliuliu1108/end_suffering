@@ -116,7 +116,7 @@ def main():
         end_time = datetime.now()
         end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        title = "今日量化数据无须重复同步"
+        title = "今日日线数据无须重复同步"
         content = (
             f"⏱️ 检查时间: {end_str}\n"
             f"📅 目标交易日: {target_date}\n"
@@ -158,7 +158,7 @@ def main():
         new_inserted = "未知"
         new_max_date = target_date
 
-    title = "今日量化数据同步完毕"
+    title = "今日日线数据同步完毕"
     content = (
         f"⏱️ 开始时间: {start_str}\n"
         f"🏁 结束时间: {end_str}\n"
