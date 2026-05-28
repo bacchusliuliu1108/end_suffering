@@ -1,6 +1,6 @@
 import os
 import sys
-import subprocess  # 新增：用于更安全地执行子进程
+import subprocess
 from datetime import datetime, timedelta
 import requests
 import psycopg2
@@ -120,10 +120,16 @@ def main():
     old_max_date = get_db_max_date()
     print(f"🚀 数据未就绪，启动核心爬虫脚本 data_collector.py ...")
 
-    # ================= 核心修改区 1：绝对路径执行 =================
+    # ================= 核心修改区：跨文件夹绝对路径执行 =================
+    # 1. 获取当前 cloud_task.py 所在的文件夹 (cronjob)
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    collector_path = os.path.join(current_dir, "data_collector.py")
-    print(f"📁 锁定爬虫路径: {collector_path}")
+
+    # 2. 退回上一级来到项目根目录
+    project_root = os.path.dirname(current_dir)
+
+    # 3. 拼接出 stock_basic_info 文件夹下 data_collector.py 的准确路径
+    collector_path = os.path.join(project_root, "stock_basic_info", "data_collector.py")
+    print(f"📁 锁定真实爬虫路径: {collector_path}")
 
     try:
         # 使用 subprocess 更安全，sys.executable 保证使用当前的 python 环境
@@ -138,6 +144,7 @@ def main():
                           f"任务开始时间: {start_str}\n爬虫脚本执行失败，请前往 GitHub 检查日志！")
         sys.exit(1)
 
+    # 爬虫执行成功，统计战果
     end_time = datetime.now()
     end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
     duration_minutes = round((end_time - start_time).total_seconds() / 60, 2)
@@ -155,9 +162,8 @@ def main():
         new_inserted = "未知"
         new_max_date = target_date
 
-    # ================= 核心修改区 2：发射 [DATAFEED_SUCCESS] 暗号 =================
+    # ================= 发射终极暗号 =================
     title = "[DATAFEED_SUCCESS] 今日云端日线数据进货完毕"
-    # ==============================================================================
     content = (
         f"⏱️ 开始时间: {start_str}\n"
         f"🏁 结束时间: {end_str}\n"
