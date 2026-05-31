@@ -1,4 +1,4 @@
-name: 每日17点云端爬虫
+name: 每日17点云端日线爬虫
 
 on:
   schedule:

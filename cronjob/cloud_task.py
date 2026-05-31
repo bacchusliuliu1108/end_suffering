@@ -12,6 +12,7 @@ SUPABASE_URL = os.getenv("SUPABASE_DB_URL")
 
 # =============================================
 
+
 def send_pushplus_msg(title, content):
     """发送 PushPlus 通知"""
     if not PUSHPLUS_TOKEN:
@@ -96,6 +97,10 @@ def main():
 
     target_date = get_target_trade_date(start_time)
     print(f"🎯 根据分水岭算法，当前目标交易日应为: {target_date}")
+
+    # 将 YYYYMMDD 格式化为 YYYY-MM-DD，用于生成终极暗号
+    biz_date_str = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
+
     print("⏳ 正在自动更新云端 stock_basic 名单...")
 
     is_complete, existing_count, total_stocks = check_if_data_exists(target_date)
@@ -104,35 +109,30 @@ def main():
         end_time = datetime.now()
         end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        title = "今日日线数据无须重复同步"
+        # 🟩 【修改点 1】提前下班也要发送带有日期的终极暗号！
+        title = f"[DATAFEED_SUCCESS_{biz_date_str}] 今日数据云端已存在，无需重复同步"
         content = (
             f"⏱️ 检查时间: {end_str}\n"
             f"📅 目标交易日: {target_date}\n"
             f"📊 数据库状态: 已有 {existing_count} 条 / 股票总数 {total_stocks} 只\n"
             f"💡 结论: 该日数据已基本完整，系统自动拦截，未消耗 Tushare 额度。\n\n"
-            f"✅ 云端状态安全，Mac 无须拉取新数据。"
+            f"✅ 云端状态安全，Mac 本地哨兵即将自动回吸验证。"
         )
         print("\n" + content)
         send_pushplus_msg(title, content)
         sys.exit(0)
 
-        # 🟨 【未通过拦截】说明需要干活
+    # 🟨 【未通过拦截】说明需要干活
     old_max_date = get_db_max_date()
     print(f"🚀 数据未就绪，启动核心爬虫脚本 data_collector.py ...")
 
     # ================= 核心修改区：跨文件夹绝对路径执行 =================
-    # 1. 获取当前 cloud_task.py 所在的文件夹 (cronjob)
     current_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # 2. 退回上一级来到项目根目录
     project_root = os.path.dirname(current_dir)
-
-    # 3. 拼接出 stock_basic_info 文件夹下 data_collector.py 的准确路径
     collector_path = os.path.join(project_root, "stock_basic_info", "data_collector.py")
     print(f"📁 锁定真实爬虫路径: {collector_path}")
 
     try:
-        # 使用 subprocess 更安全，sys.executable 保证使用当前的 python 环境
         subprocess.run([sys.executable, collector_path], check=True)
         exit_code = 0
     except subprocess.CalledProcessError as e:
@@ -162,8 +162,8 @@ def main():
         new_inserted = "未知"
         new_max_date = target_date
 
-    # ================= 发射终极暗号 =================
-    title = "[DATAFEED_SUCCESS] 今日云端日线数据进货完毕"
+    # 🟩 【修改点 2】正常干活完毕，发送带有日期的终极暗号！
+    title = f"[DATAFEED_SUCCESS_{biz_date_str}] 今日云端日线数据进货完毕"
     content = (
         f"⏱️ 开始时间: {start_str}\n"
         f"🏁 结束时间: {end_str}\n"
