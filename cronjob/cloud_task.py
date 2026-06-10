@@ -1,7 +1,7 @@
 import os
 import sys
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import psycopg2
 
@@ -9,7 +9,9 @@ import psycopg2
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_DB_URL")
 
-
+# 🟩 【新增点：建立北京时区 (UTC+8)】
+# 彻底解决 GitHub Actions 海外服务器的时空错乱问题
+tz_bj = timezone(timedelta(hours=8))
 # =============================================
 
 
@@ -91,10 +93,12 @@ def get_db_max_date():
 
 
 def main():
-    start_time = datetime.now()
+    # 🟩 【修改点：所有获取当前时间的地方，都强制注入 tz_bj】
+    start_time = datetime.now(tz_bj)
     start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{start_str}] 🚀 开始执行云端主任务...")
+    print(f"[{start_str}] 🚀 开始执行云端主任务 (已校准为北京时间)...")
 
+    # 这里的 start_time 已经是北京时间，分水岭算法将完美运行
     target_date = get_target_trade_date(start_time)
     print(f"🎯 根据分水岭算法，当前目标交易日应为: {target_date}")
 
@@ -106,10 +110,10 @@ def main():
     is_complete, existing_count, total_stocks = check_if_data_exists(target_date)
 
     if is_complete:
-        end_time = datetime.now()
+        # 🟩 【修改点：结束时间也必须是北京时间】
+        end_time = datetime.now(tz_bj)
         end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 🟩 【修改点 1】提前下班也要发送带有日期的终极暗号！
         title = f"[DATAFEED_SUCCESS_{biz_date_str}] 今日数据云端已存在，无需重复同步"
         content = (
             f"⏱️ 检查时间: {end_str}\n"
@@ -145,7 +149,8 @@ def main():
         sys.exit(1)
 
     # 爬虫执行成功，统计战果
-    end_time = datetime.now()
+    # 🟩 【修改点：任务完成后的时间也校准为北京时间】
+    end_time = datetime.now(tz_bj)
     end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
     duration_minutes = round((end_time - start_time).total_seconds() / 60, 2)
 
@@ -162,7 +167,6 @@ def main():
         new_inserted = "未知"
         new_max_date = target_date
 
-    # 🟩 【修改点 2】正常干活完毕，发送带有日期的终极暗号！
     title = f"[DATAFEED_SUCCESS_{biz_date_str}] 今日云端日线数据进货完毕"
     content = (
         f"⏱️ 开始时间: {start_str}\n"

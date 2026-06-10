@@ -29,3 +29,5 @@ stock_basic_info/stock_data/
 *.xlsx
 *.parquet
 *.pkl
+
+local/*
