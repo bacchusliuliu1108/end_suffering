@@ -37,5 +37,6 @@ jobs:
           # 桥接 GitHub Secrets 到 Python 的 os.getenv()
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python cronjob/cloud_task.py
