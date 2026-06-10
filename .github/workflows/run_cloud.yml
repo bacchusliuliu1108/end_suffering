@@ -1,15 +1,11 @@
 name: 每日17点云端日线爬虫
 
 on:
-  # 1. 原本的免费定时器（UTC时间9点，即北京时间17点），保留作为“兜底”
-  schedule:
-    - cron: '0 9 * * *'
-
-  # 2. ⭐ 新增：监听外部高级定时器（Cron-Job）发射的专属导弹
+  # 1. ⭐ 监听外部高级定时器（Cron-Job）发射的专属导弹
   repository_dispatch:
     types: [webhook_active_trigger]
 
-  # 3. 保留手动触发权限，方便你在 GitHub 网页端随时点击 "Run workflow" 测试
+  # 2. 保留手动触发权限，方便你在 GitHub 网页端随时点击 "Run workflow" 测试
   workflow_dispatch:
 
 jobs:
@@ -29,7 +25,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # 这里默认你项目根目录有 requirements.txt。
-          # 如果你以前是手动写 pip install pandas psycopg2-binary 等，请替换成你以前的写法。
           pip install -r requirements.txt
 
       - name: 🚀 运行云端主任务 (带环境变量桥接)
