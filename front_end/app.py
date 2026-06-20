@@ -5,11 +5,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 import datetime
 import urllib.parse
+import os  # 💡 新增：用于本地环境变量兜底
 from lunar_python import Lunar, Solar
 
 # ================= 1. 页面与数据库配置 =================
 st.set_page_config(page_title="EndSuffering Daily Report", page_icon="💰", layout="wide")
-DB_URL = "postgresql://postgres:endsuffering@localhost:5432/stock_db"
+
+# 💡 核心修复：智能数据库链接获取引擎
+try:
+    # 如果在云端运行，优先强制读取 Streamlit Secrets 里的链接
+    DB_URL = st.secrets["SUPABASE_DB_URL"]
+except (FileNotFoundError, KeyError):
+    # 如果在本地运行（没有Secrets），兜底使用本地 localhost
+    DB_URL = os.getenv("SUPABASE_DB_URL", "postgresql://postgres:endsuffering@localhost:5432/stock_db")
 
 
 @st.cache_data(ttl=60)
