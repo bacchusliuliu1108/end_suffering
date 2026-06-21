@@ -9,7 +9,7 @@ import psycopg2
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_DB_URL")
 
-# 🟩 【新增点：建立北京时区 (UTC+8)】
+# 🟩 【时区校准：建立北京时区 (UTC+8)】
 # 彻底解决 GitHub Actions 海外服务器的时空错乱问题
 tz_bj = timezone(timedelta(hours=8))
 # =============================================
@@ -93,16 +93,16 @@ def get_db_max_date():
 
 
 def main():
-    # 🟩 【修改点：所有获取当前时间的地方，都强制注入 tz_bj】
+    # 强制所有获取当前时间的地方，都注入 tz_bj 北京时间
     start_time = datetime.now(tz_bj)
     start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{start_str}] 🚀 开始执行云端主任务 (已校准为北京时间)...")
 
-    # 这里的 start_time 已经是北京时间，分水岭算法将完美运行
+    # 分水岭算法
     target_date = get_target_trade_date(start_time)
     print(f"🎯 根据分水岭算法，当前目标交易日应为: {target_date}")
 
-    # 将 YYYYMMDD 格式化为 YYYY-MM-DD，用于生成终极暗号
+    # 将 YYYYMMDD 格式化为 YYYY-MM-DD，用于生成通知暗号
     biz_date_str = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
 
     print("⏳ 正在自动更新云端 stock_basic 名单...")
@@ -110,7 +110,6 @@ def main():
     is_complete, existing_count, total_stocks = check_if_data_exists(target_date)
 
     if is_complete:
-        # 🟩 【修改点：结束时间也必须是北京时间】
         end_time = datetime.now(tz_bj)
         end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -126,11 +125,11 @@ def main():
         send_pushplus_msg(title, content)
         sys.exit(0)
 
-    # 🟨 【未通过拦截】说明需要干活
+    # 🟨 【未通过拦截】说明日线未就绪，开始干活
     old_max_date = get_db_max_date()
     print(f"🚀 数据未就绪，启动核心爬虫脚本 data_collector.py ...")
 
-    # ================= 核心修改区：跨文件夹绝对路径执行 =================
+    # 跨文件夹绝对路径执行爬虫
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     collector_path = os.path.join(project_root, "stock_basic_info", "data_collector.py")
@@ -138,18 +137,33 @@ def main():
 
     try:
         subprocess.run([sys.executable, collector_path], check=True)
-        exit_code = 0
+        collector_exit_code = 0
     except subprocess.CalledProcessError as e:
-        exit_code = e.returncode
-    # ==============================================================
+        collector_exit_code = e.returncode
 
-    if exit_code != 0:
+    if collector_exit_code != 0:
         send_pushplus_msg("告警：云端爬虫运行崩溃",
-                          f"任务开始时间: {start_str}\n爬虫脚本执行失败，请前往 GitHub 检查日志！")
+                          f"任务开始时间: {start_str}\n爬虫脚本 data_collector.py 执行失败，请前往 GitHub 检查日志！")
         sys.exit(1)
 
-    # 爬虫执行成功，统计战果
-    # 🟩 【修改点：任务完成后的时间也校准为北京时间】
+    # 🟩 【核心新增点：爬虫进货成功，无缝触发 ETL 因子计算流水线】
+    print(f"🚀 云端日线进货完毕，立刻触发云端 ETL 智能特征对账计算...")
+    etl_path = os.path.join(project_root, "etl", "etl_pipeline.py")
+    print(f"📁 锁定特征清洗路径: {etl_path}")
+
+    try:
+        # 直接无参调用，etl_pipeline.py 内部会通过 get_missing_dates_cloud 自动查缺补漏
+        subprocess.run([sys.executable, etl_path], check=True)
+        etl_exit_code = 0
+    except subprocess.CalledProcessError as e:
+        etl_exit_code = e.returncode
+
+    if etl_exit_code != 0:
+        send_pushplus_msg("告警：云端 ETL 因子表计算崩溃",
+                          f"任务开始时间: {start_str}\n原始日线爬取成功，但后续特征表计算脚本 etl_pipeline.py 执行失败！请立刻排查。")
+        sys.exit(1)
+
+    # 🏁 爬虫与 ETL 特征清洗双线执行成功，统计最终战果
     end_time = datetime.now(tz_bj)
     end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
     duration_minutes = round((end_time - start_time).total_seconds() / 60, 2)
@@ -167,14 +181,15 @@ def main():
         new_inserted = "未知"
         new_max_date = target_date
 
-    title = f"[DATAFEED_SUCCESS_{biz_date_str}] 今日云端日线数据进货完毕"
+    title = f"[PIPELINE_SUCCESS_{biz_date_str}] 今日日线与ETL因子计算全量完成"
     content = (
         f"⏱️ 开始时间: {start_str}\n"
         f"🏁 结束时间: {end_str}\n"
-        f"⏳ 任务耗时: {duration_minutes} 分钟\n"
-        f"📈 本次新增: {new_inserted} 条\n"
-        f"📅 最新交易日: {new_max_date if new_max_date else '暂无数据'}\n\n"
-        f"✅ 进货成功！Mac 本地哨兵即将自动回吸。"
+        f"⏳ 任务总耗时: {duration_minutes} 分钟\n"
+        f"📈 本次新增日线: {new_inserted} 条\n"
+        f"📅 最新有效交易日: {new_max_date if new_max_date else '暂无数据'}\n\n"
+        f"✅ 爬虫抓取与时序因子计算全线竣工！30天外历史沉余碎片已自动切除清理。\n"
+        f"🚀 线上特征弹药库已是最新状态，网页前端与本地哨兵随时可取！"
     )
 
     print("\n" + content)
