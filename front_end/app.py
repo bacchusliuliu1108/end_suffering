@@ -380,8 +380,7 @@ def render_emotion_metrics(sub_df, sub_df_yesterday):
             w_df[['ts_code', 'name', 'close', 'pct_chg', 'amount_yi']].sort_values(by=['pct_chg', 'amount_yi'],
                                                                                    ascending=[False, False])
             .style.format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'amount_yi': '{:.2f} 亿'}),
-            use_container_width=True, height=250
-            # Streamlit legacy behavior fix handling below where necessary, but we update explicit ones to width='stretch'
+            width="stretch", height=250
         )
     with d2.expander("📊 查看【微盘股】底层成分明细"):
         st.dataframe(
@@ -737,7 +736,7 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
             st.markdown("**🚀 平均涨幅前 100 行业**")
             disp_a2 = theme_matrix_top.nlargest(100, 'sector_avg_chg')[
                 ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
-                columns={'industry': '行业名称', '资金密度溢价(%)': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
                          'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
             ).copy()
             q1_a_top_mask_d2 = (disp_a2['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
@@ -807,13 +806,16 @@ st.markdown("#### 视角 A：申万行业经典动量雷达 (涨跌幅 vs 资金
 tab_A_L1, tab_A_L2, tab_A_L3 = st.tabs(["L1(一级行业) 🌍", "L2(二级行业) 🏢", "L3(三级行业) 🔍"])
 
 with tab_A_L1:
-    render_perspective_A(df_industry[df_industry['level'] == 'L1'].copy(), safe_filter(df_y_industry, 'level', 'L1'),
+    render_perspective_A(df_industry[df_industry['level'] == 'L1'].copy(),
+                         df_y_industry[df_y_industry['level'] == 'L1'].copy(),
                          y_total_market_amount, "L1")
 with tab_A_L2:
-    render_perspective_A(df_industry[df_industry['level'] == 'L2'].copy(), safe_filter(df_y_industry, 'level', 'L2'),
+    render_perspective_A(df_industry[df_industry['level'] == 'L2'].copy(),
+                         df_y_industry[df_y_industry['level'] == 'L2'].copy(),
                          y_total_market_amount, "L2")
 with tab_A_L3:
-    render_perspective_A(df_industry[df_industry['level'] == 'L3'].copy(), safe_filter(df_y_industry, 'level', 'L3'),
+    render_perspective_A(df_industry[df_industry['level'] == 'L3'].copy(),
+                         df_y_industry[df_y_industry['level'] == 'L3'].copy(),
                          y_total_market_amount, "L3")
 
 # ==========================================
@@ -1022,7 +1024,7 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
             st.markdown("**🚀 平均涨幅前 100 行业**")
             disp_c2 = theme_matrix_top_C.nlargest(100, 'sector_avg_chg')[
                 ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
-                columns={'industry': '行业名称', '资金密度溢价(%)': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
                          'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
             ).copy()
             q1_a_top_mask_d2 = (disp_c2['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
