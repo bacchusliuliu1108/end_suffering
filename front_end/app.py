@@ -13,8 +13,10 @@ st.set_page_config(page_title="EndSuffering Daily Report", page_icon="💰", lay
 
 # 强制使用本地数据库闭环
 # DB_URL = "postgresql://postgres:endsuffering@localhost:5432/stock_db"
-DB_URL = os.environ.get("SUPABASE_DB_URL", "postgresql://postgres:endsuffering@localhost:5432/stock_db")
-
+if "SUPABASE_DB_URL" in st.secrets:
+    DB_URL = st.secrets["SUPABASE_DB_URL"]
+else:
+    DB_URL = os.environ.get("SUPABASE_DB_URL", "postgresql://postgres:endsuffering@localhost:5432/stock_db")
 @st.cache_data(ttl=60)
 def fetch_all_available_dates():
     try:
