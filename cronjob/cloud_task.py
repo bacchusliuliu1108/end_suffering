@@ -8,6 +8,7 @@ import psycopg2
 # ================= 1. 配置区 =================
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_DB_URL")
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN")  # 👉 引入 Tushare 令牌
 
 tz_bj = timezone(timedelta(hours=8))
 
@@ -24,7 +25,7 @@ def send_pushplus_msg(title, content):
         "token": PUSHPLUS_TOKEN,
         "title": title,
         "content": content,
-        "template": "markdown"  # 强制使用 Markdown 排版
+        "template": "markdown"
     }
     try:
         res = requests.post(url, json=data, timeout=15)
@@ -88,9 +89,32 @@ def get_bazi_fortune(date_str):
         return f"☯️ 风水引擎休眠中... ({str(e)})"
 
 
+def get_market_index(target_date):
+    """调用 Tushare 获取上证指数核心数据"""
+    if not TUSHARE_TOKEN:
+        return "⚠️ Tushare Token 缺失，无法获取大盘点数。"
+    try:
+        import tushare as ts
+        pro = ts.pro_api(TUSHARE_TOKEN)
+        # 获取上证指数 (000001.SH)
+        df = pro.index_daily(ts_code='000001.SH', trade_date=target_date)
+        if not df.empty:
+            open_pt = df['open'].iloc[0]
+            close_pt = df['close'].iloc[0]
+            pct_chg = df['pct_chg'].iloc[0]
+            sign = "🔴" if pct_chg > 0 else ("🟢" if pct_chg < 0 else "⚪")
+            return f"**上证指数：** 开盘 **{open_pt:.2f}** 点 | 收盘 **{close_pt:.2f}** 点 | 涨跌幅 {sign} **{pct_chg:.2f}%**"
+        return "大盘点数今日尚未更新。"
+    except Exception as e:
+        return f"大盘点数获取异常: {e}"
+
+
 def get_macro_commentary(target_date):
     date_dash = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
     try:
+        # 获取大盘指数文本
+        index_text = get_market_index(target_date)
+
         conn = psycopg2.connect(SUPABASE_URL)
         cursor = conn.cursor()
 
@@ -108,7 +132,7 @@ def get_macro_commentary(target_date):
         cursor.execute(sql_market_breadth, (target_date,))
         mb_tot, mb_up, mb_down, mb_flat = cursor.fetchone()
 
-        # 2. 抓取大小盘权重比 (修复了千元单位盲区：200000 即 2 亿)
+        # 2. 抓取大小盘权重比 (2 亿即 200000 千元)
         sql_weight = """
         SELECT 
             SUM(CASE WHEN b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000 THEN 1 ELSE 0 END) as w_tot,
@@ -169,7 +193,8 @@ def get_macro_commentary(target_date):
 
         # 开始生成文字
         commentary = "### 📊 盘面全景与博弈点评\n\n"
-        commentary += f"- **主板整体气象：** 今日主板共活跃 **{mb_tot}** 只票，其中上涨 **{mb_up}** 只，下跌 **{mb_down}** 只，平盘 **{mb_flat}** 只。（注：底层接口聚焦个股，大盘指数请参阅实盘软件）。\n"
+        commentary += f"- {index_text}\n"
+        commentary += f"- **主板个股概况：** 今日主板共活跃 **{mb_tot}** 只标的，其中上涨 🔴 **{mb_up}** 只，下跌 🟢 **{mb_down}** 只，平盘 ⚪ **{mb_flat}** 只。\n"
 
         if w_rate > 55 and m_rate < 45:
             commentary += f"- **大小盘博弈 (二八分化)：** 权重胜率达 **{w_rate:.1f}%** ({w_up}/{w_tot})，微盘仅 **{m_rate:.1f}%** ({m_up}/{m_tot})。资金疯狂抱团大票避险，切忌在后排小票逆势寻死。\n"
@@ -189,12 +214,10 @@ def get_macro_commentary(target_date):
 
 
 def get_radar_summary(target_date):
-    """模块 3：A/B/C/D 视角透视汇总 (已修复连表类型不匹配Bug)"""
     try:
         conn = psycopg2.connect(SUPABASE_URL)
         cursor = conn.cursor()
 
-        # d.trade_date::varchar 是 PostgreSQL 的神级操作，强行把 DATE 转成 YYYY-MM-DD 字符串，完美对接因子表
         sql_ind = """
         WITH global_avg AS (
             SELECT SUM(amount)/NULLIF(COUNT(ts_code),0) as g_avg, SUM(amount) as g_tot FROM daily_data WHERE trade_date = %s
