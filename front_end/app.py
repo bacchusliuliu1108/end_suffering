@@ -11,12 +11,14 @@ from lunar_python import Lunar, Solar
 # ================= 1. 页面与数据库配置 =================
 st.set_page_config(page_title="EndSuffering Daily Report", page_icon="💰", layout="wide")
 
-# 强制使用本地数据库闭环
-# DB_URL = "postgresql://postgres:endsuffering@localhost:5432/stock_db"
+# 👉 核心修改：动态数据库路由
+# 优先读取 Streamlit Cloud 的机密环境变量，如果是在本地跑，则降级使用 localhost
 if "SUPABASE_DB_URL" in st.secrets:
     DB_URL = st.secrets["SUPABASE_DB_URL"]
 else:
     DB_URL = os.environ.get("SUPABASE_DB_URL", "postgresql://postgres:endsuffering@localhost:5432/stock_db")
+
+
 @st.cache_data(ttl=60)
 def fetch_all_available_dates():
     try:
@@ -127,11 +129,11 @@ if df_base_raw.empty:
 
 def clean_market_name(m):
     m_str = str(m)
-    if '主板' in m_str: return '主板'
+    if '主板' in m_str or '中小板' in m_str: return '主板'
     if '创业板' in m_str: return '创业板'
     if '科创板' in m_str: return '科创板'
     if '北交所' in m_str or '北证' in m_str: return '北交所'
-    return m_str
+    return '主板'
 
 
 df_base_raw['market_clean'] = df_base_raw['market'].apply(clean_market_name)
@@ -269,7 +271,7 @@ with st.expander("💡 点击查看【狙击控制台核心公式与四象限实
         r"\text{2) 资金虹吸率 (\%)} = \frac{\text{该板块今日总成交额}}{\text{全市场 A 股今日总成交额}} \times 100\% \quad | \quad \text{3) 板块平均换手率 (\%)} = \frac{\sum \text{板块内各股票当日换手率}}{\text{板块内股票总家数}}")
     st.markdown("**二、 底层成分股风控标红规则说明**")
     st.markdown(
-        "- **4) 梯队地位：** 当日封死涨停触发强指定权，系统自动定性为 `👑 龙头妖股`，其**【股票简称】将强制飘红高亮**。\n- **5) 20日动态乖离率：** 短线多头情绪超载，系统折算**动态乖离率 > 15.0%** 时，**单元格将强制背景爆红警告**，谨防見頂核按钮。\n- **⚠️ 流动性死区拦截：** 针对成交额低于全市场**后 10% 冰点盲区**之个股，全盘数据自动**变灰打删除线**并标注 `[流动性陷阱]`，坚决防守。")
+        "- **4) 梯队地位：** 当日封死涨停触发强指定权，系统自动定性为 `👑 龙头妖股`，其**【股票简称】将强制飘红高亮**。\n- **5) 20日动态乖离率：** 短线多头情绪超载，系统折算**动态乖离率 > 15.0%** 时，**单元格将强制背景爆红警告**，谨防见顶核按钮。\n- **⚠️ 流动性死区拦截：** 针对成交额低于全市场**后 10% 冰点盲区**之个股，全盘数据自动**变灰打删除线**并标注 `[流动性陷阱]`，坚决防守。")
     st.markdown("**三、 图表四象限实战解读（狙击版）**")
     st.markdown("**▶ 视角 A / B：动量雷达 (资金密度溢价 vs 涨跌幅)**")
     st.markdown(
@@ -379,13 +381,14 @@ def render_emotion_metrics(sub_df, sub_df_yesterday):
                                                                                    ascending=[False, False])
             .style.format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'amount_yi': '{:.2f} 亿'}),
             use_container_width=True, height=250
+            # Streamlit legacy behavior fix handling below where necessary, but we update explicit ones to width='stretch'
         )
     with d2.expander("📊 查看【微盘股】底层成分明细"):
         st.dataframe(
             m_df[['ts_code', 'name', 'close', 'pct_chg', 'amount_yi']].sort_values(by=['pct_chg', 'amount_yi'],
                                                                                    ascending=[False, False])
             .style.format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'amount_yi': '{:.2f} 亿'}),
-            use_container_width=True, height=250
+            width="stretch", height=250
         )
 
 
@@ -475,7 +478,31 @@ with tabs[6]:
 
         df_limit_up_all['industry'] = df_limit_up_all['industry'].fillna('')
         df_limit_up_all['concept'] = df_limit_up_all['concept'].fillna('')
-        df_limit_up_all['核心题材'] = df_limit_up_all.apply(lambda r: f"🏢 {r['industry']}\n🏷️ {r['concept']}", axis=1)
+
+        ind_counts = df_sw['industry'].value_counts().to_dict() if not df_sw.empty else {}
+        con_counts = df_concept['concept'].value_counts().to_dict() if not df_concept.empty else {}
+
+        sw_grouped = df_sw.groupby('ts_code')['industry'].apply(
+            lambda x: list(set(x.dropna()))).to_dict() if not df_sw.empty else {}
+        con_grouped = df_concept.groupby('ts_code')['concept'].apply(
+            lambda x: list(set(x.dropna()))).to_dict() if not df_concept.empty else {}
+
+
+        def format_top5_themes(ts_code):
+            themes = []
+            for ind in sw_grouped.get(ts_code, []):
+                cnt = ind_counts.get(ind, 999999)
+                themes.append((f"🏢 {ind}({cnt})", cnt))
+            for con in con_grouped.get(ts_code, []):
+                cnt = con_counts.get(con, 999999)
+                themes.append((f"🏷️ {con}({cnt})", cnt))
+
+            themes.sort(key=lambda x: x[1])
+            top5 = [t[0] for t in themes[:5]]
+            return '   '.join(top5)
+
+
+        df_limit_up_all['核心题材'] = df_limit_up_all['ts_code'].apply(format_top5_themes)
 
         show_cols_limit = ['ts_code', 'name', '梯队地位', 'market', '核心题材', 'limit_step', 'limit_up_type', 'close',
                            'pct_chg', 'amount_yi',
@@ -494,9 +521,10 @@ with tabs[6]:
 
         st.dataframe(
             df_limit_up_all.style.apply(highlight_dragons, axis=1)
+            .set_properties(subset=['核心题材'], **{'white-space': 'pre-wrap'})
             .format({'limit_step': '{:.0f} 连板', 'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'amount_yi': '{:.2f} 亿',
                      'turnover_rate': '{:.2f}%'}),
-            use_container_width=True, height=500
+            width="stretch", height=500
         )
 
 # -----------------------------------------------------------------
@@ -505,19 +533,16 @@ with tabs[6]:
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("2. 📡 主线资金雷达 (Main Theme Radar)")
 
-# 👉 新增点：全局第一象限（Q1 - Right Top）过滤器控制台
 with st.expander("🛠️ 战法聚焦控制台：第一象限（Q1）标的高亮与过滤配置", expanded=False):
     st.markdown(
         "设定下方雷达图及穿透明细中属于『高密度溢价 + 高涨幅/高换手』第一象限的阈值。符合条件的板块及个股将以**浅绿色加粗**高亮。")
     col_q1_a, col_q1_b = st.columns(2)
 
-    # 动量雷达 (A/B) 阈值 (X轴: Avg Chg, Y轴: Density Premium)
     g_q1_avg_chg_th = col_q1_a.number_input("动量雷达 (A/B) - X轴 [板块平均涨幅] 阈值 (%)", value=0.0, step=0.1,
                                             help="板块平均涨幅大于此值视为『高涨幅』")
     g_q1_density_a_th = col_q1_a.number_input("动量雷达 (A/B) - Y轴 [资金密度溢价] 阈值 (%)", value=50.0, step=5.0,
                                               help="资金密度溢价率大于此值视为『高密度溢价』")
 
-    # 实战雷达 (C/D) 阈值 (X轴: Vol Index, Y轴: Density Premium)
     g_q1_vol_idx_th = col_q1_b.number_input("实战雷达 (C/D) - X轴 [板块平均换手率] 阈值 (%)", value=0.5, step=0.1,
                                             help="板块平均换手活跃度大于此值视为『高换手』")
     g_q1_density_c_th = col_q1_b.number_input("实战雷达 (C/D) - Y轴 [资金密度溢价] 阈值 (%)", value=50.0, step=5.0,
@@ -559,43 +584,42 @@ def prepare_advanced_features(target_df):
 def highlight_drill_risk(df_to_style):
     styles_df = pd.DataFrame('', index=df_to_style.index, columns=df_to_style.columns)
     for idx, row in df_to_style.iterrows():
-        # 👉 拦截点：流动性死区全变灰+删除线
         if row['amount_yi'] < liquidity_limit_threshold:
             styles_df.loc[idx,
             :] = 'color: #b0b0b0; text-decoration: line-through; background-color: rgba(200,200,200,0.03);'
         else:
             if 'ma_20_bias_calc' in row and row['ma_20_bias_calc'] > 15.0:
                 if global_bazi_risk_flag:
-                    # ☯️ 风水爆破点：乖离大+命局高危 = 斩立决（全黑底红字）
                     styles_df.loc[
                         idx, 'ma_20_bias_calc'] = 'background-color: #000000; color: #ff3333; font-weight: bold; border: 2px solid red;'
                 else:
                     styles_df.loc[
                         idx, 'ma_20_bias_calc'] = 'background-color: #ff4b4b; color: white; font-weight: bold;'
             if '梯队地位' in row and "👑" in str(row['梯队地位']):
-                # 👑 空间龙空间：简称飘红
                 styles_df.loc[idx, 'name'] = 'color: #ff4b4b; font-weight: bold;'
     return styles_df
 
 
-# 👉 新增点：数据表通用 Q1 高亮函数
 def highlight_q1_source(df_to_style, q1_stocks_mask):
     styles_df = pd.DataFrame('', index=df_to_style.index, columns=df_to_style.columns)
-    # 应用浅绿色加粗背景
     q1_indices = df_to_style.index[q1_stocks_mask]
     styles_df.loc[q1_indices, :] = 'background-color: rgba(76, 175, 80, 0.15); font-weight: bold;'
     return styles_df
 
 
 if not df_sw.empty:
-    df_industry = df_base.merge(df_sw, on='ts_code', how='inner')
+    df_industry = df_base.merge(df_sw, on='ts_code', how='left')
+    df_industry['industry'] = df_industry['industry'].fillna('暂无行业')
+    df_industry['level'] = df_industry['level'].fillna('L1')
 else:
     df_industry = df_base.copy()
     df_industry['industry'] = '暂无行业'
     df_industry['level'] = 'L1'
 
 if not df_sw.empty and not df_y_base.empty:
-    df_y_industry = df_y_base.merge(df_sw, on='ts_code', how='inner')
+    df_y_industry = df_y_base.merge(df_sw, on='ts_code', how='left')
+    df_y_industry['industry'] = df_y_industry['industry'].fillna('暂无行业')
+    df_y_industry['level'] = df_y_industry['level'].fillna('L1')
 else:
     df_y_industry = df_y_base.copy()
     if not df_y_industry.empty:
@@ -603,13 +627,15 @@ else:
         df_y_industry['level'] = 'L1'
 
 if not df_concept.empty:
-    df_concept_merged = df_base.merge(df_concept.drop_duplicates(['ts_code', 'concept']), on='ts_code', how='inner')
+    df_concept_merged = df_base.merge(df_concept.drop_duplicates(['ts_code', 'concept']), on='ts_code', how='left')
+    df_concept_merged['concept'] = df_concept_merged['concept'].fillna('暂无概念')
 else:
     df_concept_merged = df_base.copy()
     df_concept_merged['concept'] = '暂无概念'
 
 if not df_concept.empty and not df_y_base.empty:
-    df_y_concept_merged = df_y_base.merge(df_concept.drop_duplicates(['ts_code', 'concept']), on='ts_code', how='inner')
+    df_y_concept_merged = df_y_base.merge(df_concept.drop_duplicates(['ts_code', 'concept']), on='ts_code', how='left')
+    df_y_concept_merged['concept'] = df_y_concept_merged['concept'].fillna('暂无概念')
 else:
     df_y_concept_merged = df_y_base.copy()
     if not df_y_concept_merged.empty:
@@ -650,18 +676,15 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
     theme_matrix['资金热度'] = theme_matrix['density_premium'].apply(
         lambda x: 'T0核心(拥挤)' if x >= 200.0 else ('T1活跃' if x >= 50.0 else ('T2跟风' if x >= 0.0 else 'T3边缘')))
 
-    # 👉 新增点：计算 Q1 动量标的掩码并高亮
     q1_a_matrix_mask = (theme_matrix['sector_avg_chg'] > g_q1_avg_chg_th) & (
                 theme_matrix['density_premium'] > g_q1_density_a_th)
     theme_matrix['industry_display'] = theme_matrix['industry'] + ' (' + theme_matrix['stock_count'].astype(str) + ')' + \
                                        theme_matrix['trend']
 
-    # 筛选 Top 100 逻辑无增删改
     top_100_siphon_idx = theme_matrix.nlargest(100, 'density_premium').index
     top_100_chg_idx = theme_matrix.nlargest(100, 'sector_avg_chg').index
     combined_idx = top_100_siphon_idx.union(top_100_chg_idx)
     theme_matrix_top = theme_matrix.loc[combined_idx].copy()
-    # 重新计算 Top 表中的 Q1 掩码
     q1_a_top_mask = (theme_matrix_top['sector_avg_chg'] > g_q1_avg_chg_th) & (
                 theme_matrix_top['density_premium'] > g_q1_density_a_th)
 
@@ -692,23 +715,38 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
     st.markdown(summary_html_A + "</ul></div>", unsafe_allow_html=True)
 
     st.markdown("##### 📊 行业宏观探查列表 (Top 100) 🎯 `[已联动上方全局板块过滤]`")
-    # 👉 修改点：汇总数据表 Q1 高亮
     with st.container():
-        st.markdown("**💰 资金密度溢价前 100 行业**")
-        disp_a1 = theme_matrix_top.nlargest(100, 'density_premium')[
-            ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
-            columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
-                     'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
-        ).copy()
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            st.markdown("**💰 资金密度溢价前 100 行业**")
+            disp_a1 = theme_matrix_top.nlargest(100, 'density_premium')[
+                ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
+                columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                         'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
+            ).copy()
 
-        # 👉 新增点：汇总数据表 Q1 高亮
-        q1_a_top_mask_d1 = (disp_a1['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
-                    disp_a1['资金密度溢价(%)'] > g_q1_density_a_th)
+            q1_a_top_mask_d1 = (disp_a1['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
+                        disp_a1['资金密度溢价(%)'] > g_q1_density_a_th)
 
-        st.dataframe(
-            disp_a1.style.format({'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
-            .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d1),
-            use_container_width=True, height=300)
+            st.dataframe(
+                disp_a1.style.format(
+                    {'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
+                .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d1),
+                width="stretch", height=300)
+        with col_a2:
+            st.markdown("**🚀 平均涨幅前 100 行业**")
+            disp_a2 = theme_matrix_top.nlargest(100, 'sector_avg_chg')[
+                ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
+                columns={'industry': '行业名称', '资金密度溢价(%)': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                         'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
+            ).copy()
+            q1_a_top_mask_d2 = (disp_a2['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
+                        disp_a2['资金密度溢价(%)'] > g_q1_density_a_th)
+            st.dataframe(
+                disp_a2.style.format(
+                    {'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
+                .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d2),
+                width="stretch", height=300)
     st.markdown("<br>", unsafe_allow_html=True)
 
     fig1 = px.scatter(
@@ -721,7 +759,6 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
         custom_data=['industry']
     )
 
-    # 👉 新增点：散点图 Q1 高亮（绘制浅绿色背景区域）
     fig1.add_shape(type="rect", x0=g_q1_avg_chg_th, y0=g_q1_density_a_th,
                    x1=theme_matrix_top['sector_avg_chg'].max() * 1.5 if not theme_matrix_top.empty else 1,
                    y1=theme_matrix_top['density_premium'].max() * 1.5 if not theme_matrix_top.empty else 1,
@@ -736,7 +773,7 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
         fig1.update_xaxes(range=[x_min - x_padding, x_max + x_padding])
 
     fig1 = optimize_scatter_labels(fig1, selected_item=st.session_state.get(f'select_A_{level_code}'))
-    event_A = st.plotly_chart(fig1, use_container_width=True, on_select="rerun", selection_mode="points",
+    event_A = st.plotly_chart(fig1, width="stretch", on_select="rerun", selection_mode="points",
                               key=f"chart_A_{level_code}")
 
     options_A = theme_matrix_top.sort_values(by='siphon_rate', ascending=False)['industry'].tolist()
@@ -747,7 +784,6 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
 
     if selected_industry_A:
         ind_df_A = df_level[df_level['industry'] == selected_industry_A].copy()
-        # 计算底层穿透表的 Q1 高亮掩码
         q1_targets_A = theme_matrix[q1_a_matrix_mask]['industry'].tolist()
         q1_stocks_mask_A = ind_df_A['industry'].isin(q1_targets_A)
 
@@ -756,12 +792,11 @@ def render_perspective_A(df_level, df_y_level, y_total_amt, level_code):
         st.dataframe(
             ind_df_A.sort_values(by=['pct_chg', 'amount_yi'], ascending=[False, False])[show_cols_A]
             .style.apply(highlight_drill_risk, axis=None)
-            # 👉 新增点：底层穿透数据表 Q1 高亮
             .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_stocks_mask_A)
             .format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'high_pct': '{:.2f}%', 'low_pct': '{:.2f}%',
                      'amplitude': '{:.2f}%', 'ma_20_bias_calc': format_bias_calc, 'amount_yi': '{:.2f} 亿',
                      'turnover_rate': '{:.2f}%'}),
-            use_container_width=True, height=300
+            width="stretch", height=300
         )
 
 
@@ -819,7 +854,6 @@ theme_matrix_concept['density_premium'] = ((theme_matrix_concept['sector_amt'] /
     'stock_count']) - global_single_stock_avg_amt) / global_single_stock_avg_amt * 100
 theme_matrix_concept = theme_matrix_concept[theme_matrix_concept['siphon_rate'] >= 0.2]
 
-# 👉 新增点：计算 Q1 概念动量标的掩码并高亮
 q1_b_matrix_mask = (theme_matrix_concept['sector_avg_chg'] > g_q1_avg_chg_th) & (
             theme_matrix_concept['density_premium'] > g_q1_density_a_th)
 
@@ -859,14 +893,13 @@ fig_concept = px.scatter(
     height=500, title="💡 右上角为核心『锋锐聚焦+超额赚钱』概念风口", custom_data=['concept']
 )
 
-# 👉 新增点：散点图 Q1 高亮（绘制浅绿色背景区域）
 fig_concept.add_shape(type="rect", x0=g_q1_avg_chg_th, y0=g_q1_density_a_th,
                       x1=theme_matrix_concept['sector_avg_chg'].max() * 1.5 if not theme_matrix_concept.empty else 1,
                       y1=theme_matrix_concept['density_premium'].max() * 1.5 if not theme_matrix_concept.empty else 1,
                       fillcolor="rgba(76, 175, 80, 0.08)", line_width=0, layer="below")
 
 fig_concept = optimize_scatter_labels(fig_concept, selected_item=st.session_state.get('select_concept'))
-event_concept = st.plotly_chart(fig_concept, use_container_width=True, on_select="rerun", selection_mode="points",
+event_concept = st.plotly_chart(fig_concept, width="stretch", on_select="rerun", selection_mode="points",
                                 key="chart_concept")
 
 options_concept = theme_matrix_concept.sort_values(by='siphon_rate', ascending=False)['concept'].tolist()
@@ -876,7 +909,6 @@ selected_concept = st.selectbox("h_B", options_concept, key="select_concept", la
 
 if selected_concept:
     ind_df_B = df_concept_merged[df_concept_merged['concept'] == selected_concept].copy()
-    # 计算底层穿透表的 Q1 高亮掩码
     q1_targets_B = theme_matrix_concept[q1_b_matrix_mask]['concept'].tolist()
     q1_stocks_mask_B = ind_df_B['concept'].isin(q1_targets_B)
 
@@ -885,12 +917,11 @@ if selected_concept:
     st.dataframe(
         ind_df_B.sort_values(by=['pct_chg', 'amount_yi'], ascending=[False, False])[show_cols_B]
         .style.apply(highlight_drill_risk, axis=None)
-        # 👉 新增点：底层穿透数据表 Q1 高亮
         .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_stocks_mask_B)
         .format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'high_pct': '{:.2f}%', 'low_pct': '{:.2f}%',
                  'amplitude': '{:.2f}%', 'ma_20_bias_calc': format_bias_calc, 'amount_yi': '{:.2f} 亿',
                  'turnover_rate': '{:.2f}%'}),
-        use_container_width=True, height=300
+        width="stretch", height=300
     )
 
 
@@ -925,7 +956,6 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
     theme_matrix_C['资金热度'] = theme_matrix_C['density_premium'].apply(
         lambda x: 'T0核心(拥挤)' if x >= 200.0 else ('T1活跃' if x >= 50.0 else ('T2跟风' if x >= 0.0 else 'T3边缘')))
 
-    # 👉 新增点：计算 Q1 行业实战标的掩码并高亮 (高换手+高溢价)
     q1_c_matrix_mask = (theme_matrix_C['sector_vol_idx'] > g_q1_vol_idx_th) & (
                 theme_matrix_C['density_premium'] > g_q1_density_c_th)
 
@@ -937,7 +967,6 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
     theme_matrix_C['industry_display'] = theme_matrix_C['industry'] + ' (' + theme_matrix_C['stock_count'].astype(
         str) + ')' + theme_matrix_C['trend']
 
-    # 筛选 Top 100 逻辑无增删改
     top_100_siphon_idx_C = theme_matrix_C.nlargest(100, 'density_premium').index
     top_100_chg_idx_C = theme_matrix_C.nlargest(100, 'sector_avg_chg').index
     combined_idx_C = top_100_siphon_idx_C.union(top_100_chg_idx_C)
@@ -971,25 +1000,38 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
     st.markdown(summary_html_C + "</ul></div>", unsafe_allow_html=True)
 
     st.markdown("##### 📊 行业游资活跃度探查列表 (Top 100) 🎯 `[已联动上方全局板块过滤]`")
-    # 👉 修改点：实战汇总数据表 Q1 高亮
     with st.container():
-        st.markdown("**💰 资金密度溢价前 100 行业**")
-        disp_c1 = theme_matrix_top_C.nlargest(100, 'density_premium')[
-            ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
-            columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
-                     'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
-        ).copy()
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown("**💰 资金密度溢价前 100 行业**")
+            disp_c1 = theme_matrix_top_C.nlargest(100, 'density_premium')[
+                ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
+                columns={'industry': '行业名称', 'density_premium': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                         'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
+            ).copy()
 
-        # 👉 新增点：汇总数据表 Q1 高亮 (注意：视角C的Q1由Vol Index和Density共同决定，但Top 100表只有 Avg Chg。这里仍以 Avg Chg 判定Q1涨幅维度)
-        # 如果需要严格高亮视角C气泡图的Q1，需要在此Top表合并 sector_vol_idx。
-        # 简单起见，仍高亮汇总表，这里统一采用 Avg Chg 阈值高亮赚钱效应部分。
-        q1_a_top_mask_d1 = (disp_c1['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
-                    disp_c1['资金密度溢价(%)'] > g_q1_density_a_th)
+            q1_a_top_mask_d1 = (disp_c1['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
+                        disp_c1['资金密度溢价(%)'] > g_q1_density_a_th)
 
-        st.dataframe(
-            disp_c1.style.format({'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
-            .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d1),
-            use_container_width=True, height=300)
+            st.dataframe(
+                disp_c1.style.format(
+                    {'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
+                .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d1),
+                width="stretch", height=300)
+        with col_c2:
+            st.markdown("**🚀 平均涨幅前 100 行业**")
+            disp_c2 = theme_matrix_top_C.nlargest(100, 'sector_avg_chg')[
+                ['industry', '资金热度', 'density_premium', 'siphon_rate', 'stock_count', 'sector_avg_chg']].rename(
+                columns={'industry': '行业名称', '资金密度溢价(%)': '资金密度溢价(%)', 'siphon_rate': '行业虹吸率(%)',
+                         'stock_count': '行业股票数数目', 'sector_avg_chg': '行业平均涨幅(%)'}
+            ).copy()
+            q1_a_top_mask_d2 = (disp_c2['行业平均涨幅(%)'] > g_q1_avg_chg_th) & (
+                        disp_c2['资金密度溢价(%)'] > g_q1_density_a_th)
+            st.dataframe(
+                disp_c2.style.format(
+                    {'资金密度溢价(%)': '{:.2f}', '行业虹吸率(%)': '{:.2f}', '行业平均涨幅(%)': '{:.2f}'})
+                .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_a_top_mask_d2),
+                width="stretch", height=300)
     st.markdown("<br>", unsafe_allow_html=True)
 
     fig_C = px.scatter(
@@ -1002,7 +1044,6 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
         custom_data=['industry']
     )
 
-    # 👉 修改点：散点图 Q1 高亮（绘制浅绿色背景区域，采用 C/D 阈值）
     fig_C.add_shape(type="rect", x0=g_q1_vol_idx_th, y0=g_q1_density_c_th,
                     x1=theme_matrix_top_C['sector_vol_idx'].max() * 1.5 if not theme_matrix_top_C.empty else 1,
                     y1=theme_matrix_top_C['density_premium'].max() * 1.5 if not theme_matrix_top_C.empty else 1,
@@ -1017,7 +1058,7 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
         fig_C.update_xaxes(range=[max(0, x_min_C - x_padding_C), x_max_C + x_padding_C])
 
     fig_C = optimize_scatter_labels(fig_C, selected_item=st.session_state.get(f'select_C_{level_code}'))
-    event_C = st.plotly_chart(fig_C, use_container_width=True, on_select="rerun", selection_mode="points",
+    event_C = st.plotly_chart(fig_C, width="stretch", on_select="rerun", selection_mode="points",
                               key=f"chart_C_{level_code}")
 
     options_C = theme_matrix_top_C.sort_values(by='siphon_rate', ascending=False)['industry'].tolist()
@@ -1028,7 +1069,6 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
 
     if selected_industry_C:
         ind_df_C = df_level[df_level['industry'] == selected_industry_C].copy()
-        # 计算底层穿透表的 Q1 高亮掩码
         q1_targets_C = theme_matrix_C[q1_c_matrix_mask]['industry'].tolist()
         q1_stocks_mask_C = ind_df_C['industry'].isin(q1_targets_C)
 
@@ -1037,12 +1077,11 @@ def render_perspective_C(df_level, df_y_level, y_total_amt, level_code):
         st.dataframe(
             ind_df_C.sort_values(by=['pct_chg', 'amount_yi'], ascending=[False, False])[show_cols_C]
             .style.apply(highlight_drill_risk, axis=None)
-            # 👉 新增点：底层穿透数据表 Q1 高亮
             .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_stocks_mask_C)
             .format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'high_pct': '{:.2f}%', 'low_pct': '{:.2f}%',
                      'amplitude': '{:.2f}%', 'ma_20_bias_calc': format_bias_calc, 'amount_yi': '{:.2f} 亿',
                      'turnover_rate': '{:.2f}%'}),
-            use_container_width=True, height=300
+            width="stretch", height=300
         )
 
 
@@ -1098,7 +1137,6 @@ else:
 theme_matrix_D['density_premium'] = ((theme_matrix_D['sector_amt'] / theme_matrix_D[
     'stock_count']) - global_single_stock_avg_amt) / global_single_stock_avg_amt * 100
 theme_matrix_D = theme_matrix_D[theme_matrix_D['siphon_rate'] >= 2.0]
-# 👉 新增点：计算 Q1 概念实战标的掩码并高亮 (高换手+高溢价)
 q1_d_matrix_mask = (theme_matrix_D['sector_vol_idx'] > g_q1_vol_idx_th) & (
             theme_matrix_D['density_premium'] > g_q1_density_c_th)
 
@@ -1143,14 +1181,13 @@ fig_D = px.scatter(
             'concept_display': 'concept', 'siphon_rate': '资金虹吸率 (%)'},
     height=500, title="💡 浅红阴影为核心聚集主线矿区", custom_data=['concept']
 )
-# 👉 修改点：散点图 Q1 高亮（绘制浅绿色背景区域，采用 C/D 阈值）
 fig_D.add_shape(type="rect", x0=g_q1_vol_idx_th, y0=g_q1_density_c_th,
                 x1=theme_matrix_D['sector_vol_idx'].max() * 1.5 if not theme_matrix_D.empty else 1,
                 y1=theme_matrix_D['density_premium'].max() * 1.5 if not theme_matrix_D.empty else 1,
                 fillcolor="rgba(76, 175, 80, 0.08)", line_width=0, layer="below")
 
 fig_D = optimize_scatter_labels(fig_D, selected_item=st.session_state.get('select_D'))
-event_D = st.plotly_chart(fig_D, use_container_width=True, on_select="rerun", selection_mode="points", key="chart_D")
+event_D = st.plotly_chart(fig_D, width="stretch", on_select="rerun", selection_mode="points", key="chart_D")
 
 options_D = theme_matrix_D.sort_values(by='siphon_rate', ascending=False)['concept'].tolist()
 if event_D and "selection" in event_D and event_D["selection"]["points"]:
@@ -1159,7 +1196,6 @@ selected_concept_D = st.selectbox("h_D", options_D, key="select_D", label_visibi
 
 if selected_concept_D:
     ind_df_D = df_concept_merged[df_concept_merged['concept'] == selected_concept_D].copy()
-    # 计算底层穿透表的 Q1 高亮掩码
     q1_targets_D = theme_matrix_D[q1_d_matrix_mask]['concept'].tolist()
     q1_stocks_mask_D = ind_df_D['concept'].isin(q1_targets_D)
 
@@ -1168,10 +1204,9 @@ if selected_concept_D:
     st.dataframe(
         ind_df_D.sort_values(by=['pct_chg', 'amount_yi'], ascending=[False, False])[show_cols_D]
         .style.apply(highlight_drill_risk, axis=None)
-        # 👉 新增点：底层穿透数据表 Q1 高亮
         .apply(highlight_q1_source, axis=None, q1_stocks_mask=q1_stocks_mask_D)
         .format({'close': '{:.2f}', 'pct_chg': '{:.2f}%', 'high_pct': '{:.2f}%', 'low_pct': '{:.2f}%',
                  'amplitude': '{:.2f}%', 'ma_20_bias_calc': format_bias_calc, 'amount_yi': '{:.2f} 亿',
                  'turnover_rate': '{:.2f}%'}),
-        use_container_width=True, height=300
+        width="stretch", height=300
     )
