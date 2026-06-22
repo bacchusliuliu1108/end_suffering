@@ -15,9 +15,8 @@ tz_bj = timezone(timedelta(hours=8))
 # =============================================
 
 def send_pushplus_msg(title, content):
-    """发送 PushPlus 通知 (带完整发声监控)"""
     if not PUSHPLUS_TOKEN:
-        print("⚠️ 警告：环境变量中没有找到 PUSHPLUS_TOKEN，放弃推送！")
+        print("⚠️ 未配置 PUSHPLUS_TOKEN，跳过微信推送。")
         return
 
     url = "http://www.pushplus.plus/send"
@@ -25,15 +24,13 @@ def send_pushplus_msg(title, content):
         "token": PUSHPLUS_TOKEN,
         "title": title,
         "content": content,
-        "template": "markdown"  # 👉 改用 markdown，排版更强，防吞噬
+        "template": "markdown"  # 强制使用 Markdown 排版
     }
     try:
-        print(f"🚀 正在向微信发送战报...")
         res = requests.post(url, json=data, timeout=15)
-        print(f"📬 PushPlus 官方响应码: {res.status_code}")
-        print(f"📬 PushPlus 返回详情: {res.text}")
+        print(f"📬 PushPlus 响应: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"❌ 微信推送发生网络异常: {e}")
+        print(f"❌ 微信推送网络异常: {e}")
 
 
 def get_target_trade_date(now):
@@ -82,13 +79,11 @@ def get_bazi_fortune(date_str):
         user_shengxiao = user_lunar.getYearShengXiao()
 
         if user_shengxiao in target_lunar.getDayChongDesc():
-            warning = f"⚠️ **警告：** 次日大盘冲{target_lunar.getDayChongDesc()}煞{target_lunar.getDaySha()}，正犯你本命【{user_shengxiao}】！极易震荡，防守为主。"
+            warning = f"⚠️ **高危预警：** 次日大盘冲{target_lunar.getDayChongDesc()}煞{target_lunar.getDaySha()}，正犯你本命【{user_shengxiao}】！极易震荡，防守为主。"
         else:
             warning = f"✨ 次日大盘与你命局无冲。日主纳音【{target_lunar.getDayNaYin()}】交汇，接力情绪契合，宜果断执行交易纪律。"
 
         return f"**☯️ 次日 ({tomorrow.month}月{tomorrow.day}日) 专属操盘风水指引：**\n\n次日财神居 **{target_lunar.getPositionCaiDesc()}方**。游资接力幸运色为 **{target_lunar.getDayGan()}系**。\n> {warning}"
-    except ImportError:
-        return "**☯️ 专属玄学风水指引：** 敬畏市场，知行合一即是最大财库。"
     except Exception as e:
         return f"☯️ 风水引擎休眠中... ({str(e)})"
 
@@ -99,17 +94,33 @@ def get_macro_commentary(target_date):
         conn = psycopg2.connect(SUPABASE_URL)
         cursor = conn.cursor()
 
+        # 1. 抓取主板整体涨跌数据
+        sql_market_breadth = """
+        SELECT 
+            COUNT(d.ts_code) as total,
+            SUM(CASE WHEN d.pct_chg > 0 THEN 1 ELSE 0 END) as up_cnt,
+            SUM(CASE WHEN d.pct_chg < 0 THEN 1 ELSE 0 END) as down_cnt,
+            SUM(CASE WHEN d.pct_chg = 0 THEN 1 ELSE 0 END) as flat_cnt
+        FROM daily_data d
+        JOIN stock_basic b ON d.ts_code = b.ts_code
+        WHERE d.trade_date = %s AND b.market IN ('主板', '上海主板', '深圳主板');
+        """
+        cursor.execute(sql_market_breadth, (target_date,))
+        mb_tot, mb_up, mb_down, mb_flat = cursor.fetchone()
+
+        # 2. 抓取大小盘权重比 (修复了千元单位盲区：200000 即 2 亿)
         sql_weight = """
         SELECT 
-            SUM(CASE WHEN b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000000 THEN 1 ELSE 0 END) as w_tot,
-            SUM(CASE WHEN b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000000 AND d.pct_chg > 0 THEN 1 ELSE 0 END) as w_up,
-            SUM(CASE WHEN NOT (b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000000) THEN 1 ELSE 0 END) as m_tot,
-            SUM(CASE WHEN NOT (b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000000) AND d.pct_chg > 0 THEN 1 ELSE 0 END) as m_up
+            SUM(CASE WHEN b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000 THEN 1 ELSE 0 END) as w_tot,
+            SUM(CASE WHEN b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000 AND d.pct_chg > 0 THEN 1 ELSE 0 END) as w_up,
+            SUM(CASE WHEN NOT (b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000) THEN 1 ELSE 0 END) as m_tot,
+            SUM(CASE WHEN NOT (b.market IN ('主板', '上海主板', '深圳主板') AND d.amount >= 200000) AND d.pct_chg > 0 THEN 1 ELSE 0 END) as m_up
         FROM daily_data d LEFT JOIN stock_basic b ON d.ts_code = b.ts_code WHERE d.trade_date = %s;
         """
         cursor.execute(sql_weight, (target_date,))
         w_tot, w_up, m_tot, m_up = cursor.fetchone()
 
+        # 3. 抓取打板情绪指标
         sql_emotion = """
         SELECT 
             SUM(CASE WHEN is_limit_up = true THEN 1 ELSE 0 END) as limit_up,
@@ -120,9 +131,29 @@ def get_macro_commentary(target_date):
         """
         cursor.execute(sql_emotion, (date_dash,))
         limit_up, real_board, bomb, max_step = cursor.fetchone()
+
+        # 4. 提取空间龙名字
+        dragon_str = "无"
+        if max_step and max_step > 0:
+            sql_dragon = """
+            SELECT b.name
+            FROM report_daily_factors f
+            JOIN stock_basic b ON f.ts_code = b.ts_code
+            WHERE f.trade_date = %s AND f.limit_step = %s AND f.is_limit_up = true;
+            """
+            cursor.execute(sql_dragon, (date_dash, max_step))
+            dragons = [r[0] for r in cursor.fetchall()]
+            if dragons:
+                dragon_str = "、".join(dragons)
+
         cursor.close()
         conn.close()
 
+        # 数据防空兜底
+        mb_tot = mb_tot or 0;
+        mb_up = mb_up or 0;
+        mb_down = mb_down or 0;
+        mb_flat = mb_flat or 0
         w_tot = w_tot or 1;
         m_tot = m_tot or 1
         w_up = w_up or 0;
@@ -136,20 +167,21 @@ def get_macro_commentary(target_date):
         m_rate = (m_up / m_tot) * 100
         bomb_rate = (bomb / (limit_up + bomb) * 100) if (limit_up + bomb) > 0 else 0
 
-        commentary = "### 📊 全局博弈点评\n"
-        if w_rate > 55 and m_rate < 45:
-            commentary += f"- 🏛️ **典型的「二八分化」！** 权重股胜率达 **{w_rate:.1f}%**，微盘股仅 **{m_rate:.1f}%**。资金在疯狂抱团大票避险，切忌在后排杂毛里逆势寻死。\n"
-        elif m_rate > 55 and w_rate < 45:
-            commentary += f"- 🌪️ **「题材唱戏」格局！** 微盘股胜率达 **{m_rate:.1f}%** 碾压权重(**{w_rate:.1f}%**)。游资在小票里翻江倒海，轻指数重个股，聚焦前排短线核心。\n"
-        elif w_rate > 55 and m_rate > 55:
-            commentary += f"- 📈 **「普涨狂欢」！** 大小盘胜率双双突破 55% (权重 **{w_rate:.1f}%**, 微盘 **{m_rate:.1f}%**)。系统性做多窗口开启，持股待涨即可。\n"
-        else:
-            commentary += f"- 🧊 **「混沌冰点」！** 全盘沉闷，权重胜率 **{w_rate:.1f}%**，微盘胜率 **{m_rate:.1f}%**。资金失去方向，观望情绪浓厚。\n"
+        # 开始生成文字
+        commentary = "### 📊 盘面全景与博弈点评\n\n"
+        commentary += f"- **主板整体气象：** 今日主板共活跃 **{mb_tot}** 只票，其中上涨 **{mb_up}** 只，下跌 **{mb_down}** 只，平盘 **{mb_flat}** 只。（注：底层接口聚焦个股，大盘指数请参阅实盘软件）。\n"
 
-        if bomb_rate > 35:
-            commentary += f"- 🚨 **情绪极度恶劣！** 今日炸板率飙升至 **{bomb_rate:.1f}%**，多头被惨烈坑杀。空间龙压制在 **{max_step} 板**，次日严防恐慌性核按钮，管住手！\n"
+        if w_rate > 55 and m_rate < 45:
+            commentary += f"- **大小盘博弈 (二八分化)：** 权重胜率达 **{w_rate:.1f}%** ({w_up}/{w_tot})，微盘仅 **{m_rate:.1f}%** ({m_up}/{m_tot})。资金疯狂抱团大票避险，切忌在后排小票逆势寻死。\n"
+        elif m_rate > 55 and w_rate < 45:
+            commentary += f"- **大小盘博弈 (题材唱戏)：** 微盘胜率达 **{m_rate:.1f}%** ({m_up}/{m_tot}) 碾压权重 (**{w_rate:.1f}%**)。游资在小票翻江倒海，轻指数重个股。\n"
+        elif w_rate > 55 and m_rate > 55:
+            commentary += f"- **大小盘博弈 (普涨狂欢)：** 大小盘齐飙，权重胜率 **{w_rate:.1f}%**，微盘 **{m_rate:.1f}%**。系统性做多窗口开启。\n"
         else:
-            commentary += f"- 🔥 **情绪健康。** 炸板率 **{bomb_rate:.1f}%** 处于良性区间，全场跑出 **{real_board} 家** 真实换手板。天梯空间拓荒至 **{max_step} 连板**，存在极佳的晋级土壤。"
+            commentary += f"- **大小盘博弈 (混沌冰点)：** 全盘沉闷，权重胜率 **{w_rate:.1f}%** ({w_up}/{w_tot})，微盘 **{m_rate:.1f}%** ({m_up}/{m_tot})。资金观望情绪浓厚。\n"
+
+        commentary += f"- **打板情绪测温：** 炸板率 **{bomb_rate:.1f}%** ({bomb}家炸板 / {limit_up}家涨停)，真实换手上车板 **{real_board}** 家。\n"
+        commentary += f"- **天梯空间龙：** 最高压制在 **{max_step} 连板**，全场龙头标的：【**{dragon_str}**】。"
 
         return commentary
     except Exception as e:
@@ -157,11 +189,12 @@ def get_macro_commentary(target_date):
 
 
 def get_radar_summary(target_date):
-    date_dash = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
+    """模块 3：A/B/C/D 视角透视汇总 (已修复连表类型不匹配Bug)"""
     try:
         conn = psycopg2.connect(SUPABASE_URL)
         cursor = conn.cursor()
 
+        # d.trade_date::varchar 是 PostgreSQL 的神级操作，强行把 DATE 转成 YYYY-MM-DD 字符串，完美对接因子表
         sql_ind = """
         WITH global_avg AS (
             SELECT SUM(amount)/NULLIF(COUNT(ts_code),0) as g_avg, SUM(amount) as g_tot FROM daily_data WHERE trade_date = %s
@@ -173,7 +206,7 @@ def get_radar_summary(target_date):
             AVG(d.pct_chg) as avg_chg,
             AVG(f.turnover_rate) as avg_turn
         FROM daily_data d
-        JOIN report_daily_factors f ON d.ts_code = f.ts_code AND d.trade_date = f.trade_date
+        JOIN report_daily_factors f ON d.ts_code = f.ts_code AND d.trade_date::varchar = f.trade_date
         JOIN stock_sw_industry i ON d.ts_code = i.ts_code AND i.level = 'L2'
         WHERE d.trade_date = %s
         GROUP BY i.industry_name HAVING COUNT(d.ts_code) >= 5
@@ -190,37 +223,38 @@ def get_radar_summary(target_date):
             AVG(d.pct_chg) as avg_chg,
             AVG(f.turnover_rate) as avg_turn
         FROM daily_data d
-        JOIN report_daily_factors f ON d.ts_code = f.ts_code AND d.trade_date = f.trade_date
+        JOIN report_daily_factors f ON d.ts_code = f.ts_code AND d.trade_date::varchar = f.trade_date
         JOIN stock_concept c ON d.ts_code = c.ts_code
         WHERE d.trade_date = %s AND c.concept_name NOT LIKE '%%同花顺%%' AND c.concept_name NOT LIKE '%%融资%%'
         GROUP BY c.concept_name HAVING COUNT(d.ts_code) BETWEEN 5 AND 1000
         """
 
-        cursor.execute(sql_ind, (target_date, date_dash))
+        cursor.execute(sql_ind, (target_date, target_date))
         ind_rows = cursor.fetchall()
-        cursor.execute(sql_con, (target_date, date_dash))
+        cursor.execute(sql_con, (target_date, target_date))
         con_rows = cursor.fetchall()
         cursor.close()
         conn.close()
 
         if not ind_rows or not con_rows: return "雷达探测数据不足。"
 
-        top_A = sorted(ind_rows, key=lambda x: x[2] + x[3] * 5, reverse=True)[0]
-        top_B = sorted(con_rows, key=lambda x: x[2] + x[3] * 5, reverse=True)[0]
-        top_C = sorted(ind_rows, key=lambda x: x[4], reverse=True)[0]
-        top_D = sorted(con_rows, key=lambda x: x[4], reverse=True)[0]
+        top_A = sorted(ind_rows, key=lambda x: (x[2] or 0) + (x[3] or 0) * 5, reverse=True)[0]
+        top_B = sorted(con_rows, key=lambda x: (x[2] or 0) + (x[3] or 0) * 5, reverse=True)[0]
+        top_C = sorted(ind_rows, key=lambda x: (x[4] or 0), reverse=True)[0]
+        top_D = sorted(con_rows, key=lambda x: (x[4] or 0), reverse=True)[0]
 
-        summary = "### 📡 A/B/C/D 资金雷达透视\n"
-        summary += f"- **📍 视角A (行业动量)：** 【**{top_A[0]}**】成为今日吸金暴风眼。资金密度溢价率高达 **{top_A[2]:.1f}%** 且逆势斩获 **{top_A[3]:.1f}%** 涨幅。逻辑：资金在此处绝对聚焦且超额赚钱。\n"
-        summary += f"- **📍 视角B (概念风口)：** 【**{top_B[0]}**】领跑全场题材。单票虹吸极强(溢价 **{top_B[2]:.1f}%**)，多头合力极度坚决。\n"
-        summary += f"- **📍 视角C (行业游资)：** 【**{top_C[0]}**】换手率飙升至 **{top_C[4]:.1f}%**。筹码高强度换手，若资金密度配合度高，极易爆出连板大妖。\n"
-        summary += f"- **📍 视角D (题材火葬场/加速区)：** 【**{top_D[0]}**】资金博弈白热化，平均换手高达 **{top_D[4]:.1f}%**，警惕高位分歧派发或核按钮。\n"
+        summary = "### 📡 核心资金主线透视 (基于动量与换手)\n\n"
+        summary += f"- **📍 视角A (行业动量)：** 资金重仓突击【**{top_A[0]}**】！该板块资金密度溢价率高达 **{top_A[2]:.1f}%**，逆势斩获 **{top_A[3]:.1f}%** 的平均涨幅。逻辑：兼具高度聚焦与超额赚钱效应的绝对主线。\n"
+        summary += f"- **📍 视角B (概念风口)：** 【**{top_B[0]}**】概念领跑全场！资金虹吸率达 **{top_B[1]:.1f}%**，单票吸金极度夸张(密度溢价 **{top_B[2]:.1f}%**)，多头合力拉升最坚决。\n"
+        summary += f"- **📍 视角C (行业游资)：** 【**{top_C[0]}**】成为游资换手矿区！平均换手率飙升至 **{top_C[4]:.1f}%**。逻辑：筹码交换极度活跃，若资金溢价配合，极易发酵出前排连板大妖。\n"
+        summary += f"- **📍 视角D (概念过热预警)：** 【**{top_D[0]}**】概念博弈白热化，平均换手率达 **{top_D[4]:.1f}%**。逻辑：警惕高位分歧，若板块出现「天量滞涨」，随时防范获利盘派发与核按钮风险。\n"
 
         return summary
     except Exception as e:
         return f"雷达引擎解析失败: {e}"
 
 
+# ================= 主控制流 =================
 def generate_and_send_report(target_date, is_already_ready=False):
     print("⏳ 开始生成战报文本...")
     date_dash = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:]}"
@@ -240,25 +274,23 @@ def main():
     print("🛠️ 启动云端任务调度中心...")
     start_time = datetime.now(tz_bj)
     target_date = get_target_trade_date(start_time)
-    print(f"🎯 锁定目标账期: {target_date}")
 
     is_complete = check_if_data_exists(target_date)
 
     if is_complete:
-        print("✅ 检测到今日数据已全量入库，跳过爬虫与ETL，直接萃取战报！")
+        print("✅ 今日数据已全量入库，直接生成战报！")
         generate_and_send_report(target_date, is_already_ready=True)
-        print("🎉 任务圆满结束。")
         sys.exit(0)
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
 
-    print("🕸️ 数据缺失，启动爬虫...")
+    print("🕸️ 启动爬虫...")
     collector_path = os.path.join(project_root, "stock_basic_info", "data_collector.py")
     try:
         subprocess.run([sys.executable, collector_path], check=True)
     except subprocess.CalledProcessError:
-        send_pushplus_msg("🚨 异常：爬虫引擎崩溃", f"日期: {target_date}\ndata_collector.py 执行受阻。")
+        send_pushplus_msg("🚨 异常：爬虫引擎崩溃", "请查阅 GitHub Action 日志。")
         sys.exit(1)
 
     print("⚙️ 启动 ETL 因子计算...")
@@ -266,7 +298,7 @@ def main():
     try:
         subprocess.run([sys.executable, etl_path], check=True)
     except subprocess.CalledProcessError:
-        send_pushplus_msg("🚨 异常：ETL 因子萃取中断", f"日期: {target_date}\nreport_daily_factors 算子崩溃。")
+        send_pushplus_msg("🚨 异常：ETL 因子萃取中断", "请查阅 GitHub Action 日志。")
         sys.exit(1)
 
     print("✅ 全线贯通，准备下发战报！")
